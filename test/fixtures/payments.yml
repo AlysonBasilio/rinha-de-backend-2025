@@ -1,0 +1,9 @@
+# Read about fixtures at https://api.rubyonrails.org/classes/ActiveRecord/FixtureSet.html
+
+one:
+  amount_in_cents: 999
+  correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b3"
+
+two:
+  amount_in_cents: 2499
+  correlation_id: "8b2a1c3d-9e4f-5a6b-7c8d-9e0f1a2b3c4d"
