@@ -24,19 +24,20 @@ class PaymentsController < ApplicationController
 
   # POST /payments or /payments.json
   def create
-    correlation_id, amount = extract_payment_params
+    service = PaymentCreationService.new(params: params, request_format: request.format)
+    result = service.call
 
-    # Check for existing payment (idempotency)
-    existing_payment = find_existing_payment(correlation_id)
-    if existing_payment
-      @payment = existing_payment
-      render_payment_response
-      return
+    @payment = result.payment
+
+    respond_to do |format|
+      if result.success?
+        format.html { redirect_to @payment, notice: "Payment was successfully created." }
+        format.json { render :show, status: :created, location: @payment }
+      else
+        format.html { render :new, status: :unprocessable_entity }
+        format.json { render json: @payment.errors, status: :unprocessable_entity }
+      end
     end
-
-    # Create new payment
-    @payment = build_payment(correlation_id, amount)
-    render_payment_response
   end
 
   # PATCH/PUT /payments/1 or /payments/1.json
@@ -71,33 +72,6 @@ class PaymentsController < ApplicationController
       else
         payment_params = params[:payment] || {}
         [ payment_params[:correlation_id], payment_params[:amount] ]
-      end
-    end
-
-    # Find existing payment by correlation_id for idempotency
-    def find_existing_payment(correlation_id)
-      return nil unless correlation_id.present?
-      Payment.find_by(correlation_id: correlation_id)
-    end
-
-    # Build new payment with given parameters
-    def build_payment(correlation_id, amount)
-      payment = Payment.new
-      payment.correlation_id = correlation_id
-      payment.amount = amount if amount.present?
-      payment
-    end
-
-    # Render appropriate response based on payment save result
-    def render_payment_response
-      respond_to do |format|
-        if @payment.persisted? || @payment.save
-          format.html { redirect_to @payment, notice: "Payment was successfully created." }
-          format.json { render :show, status: :created, location: @payment }
-        else
-          format.html { render :new, status: :unprocessable_entity }
-          format.json { render json: @payment.errors, status: :unprocessable_entity }
-        end
       end
     end
 

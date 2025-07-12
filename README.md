@@ -1,11 +1,14 @@
 # Payment Processor API
 
-A Rails 8 application that provides a secure, idempotent payment processing API with precise money handling and robust validation.
+A Rails 8 application that provides a secure, idempotent payment processing API with precise money handling, robust validation, and external payment service integration with automatic fallback capabilities.
 
 ## Table of Contents
 
 - [API Overview](#api-overview)
 - [Architecture Decisions](#architecture-decisions)
+- [Payment Service Integration](#payment-service-integration)
+- [File Structure](#file-structure)
+- [Environment Configuration](#environment-configuration)
 - [API Endpoints](#api-endpoints)
 - [Data Models](#data-models)
 - [Usage Examples](#usage-examples)
@@ -19,6 +22,7 @@ The Payment Processor API provides both JSON and HTML interfaces for creating, r
 - **Idempotent operations** using correlation IDs
 - **Precise money handling** using integer cents
 - **UUID-based correlation tracking**
+- **External payment service integration** with automatic fallback
 - **Comprehensive validation**
 - **Dual format support** (JSON API + HTML forms)
 
@@ -105,12 +109,139 @@ The Payment Processor API provides both JSON and HTML interfaces for creating, r
 - **Consistent Response**: Same response structure for original and duplicate requests
 - **Industry Standard**: Follows HTTP idempotency best practices
 
+### 7. Payment Service Routing Strategy
+
+**Decision**: Implement default/fallback payment service architecture with automatic routing.
+
+**Reasoning**:
+- **Cost Optimization**: Use cheaper default service when available
+- **Reliability**: Automatic fallback ensures high availability
+- **Smart Error Handling**: Only fallback for service unavailability (5xx errors, timeouts, connection issues)
+- **Transparency**: Same API interface regardless of which service is used
+- **Monitoring**: Detailed logging for service selection and fallback events
+
+**Implementation**:
+```ruby
+# PaymentServiceRouter automatically chooses between:
+# - DefaultPaymentService (cheaper, primary)
+# - FallbackPaymentService (more expensive, backup)
+# Fallback triggers: timeouts, connection errors, 5xx server errors
+# No fallback: 4xx client errors (re-raised immediately)
+```
+
+## Payment Service Integration
+
+The application integrates with external payment services using a sophisticated routing system that automatically handles failover between default and fallback services.
+
+### Service Architecture
+
+```
+PaymentServiceRouter
+├── DefaultPaymentService (Primary - Cheaper)
+└── FallbackPaymentService (Backup - More Expensive)
+```
+
+### Automatic Fallback Logic
+
+1. **Primary Attempt**: All requests start with the default service
+2. **Failure Detection**: Monitors for service unavailability:
+   - Network timeouts (`Net::ReadTimeout`, `Net::OpenTimeout`)
+   - Connection errors (`SocketError`, `Net::HTTPError`)
+   - Server errors (HTTP 5xx status codes)
+3. **Automatic Fallback**: Transparently switches to fallback service
+4. **Error Propagation**: Client errors (4xx) are immediately returned without fallback
+
+### Service Selection Flow
+
+```mermaid
+graph TD
+    A[Payment Request] --> B[Default Service]
+    B --> C{Service Available?}
+    C -->|Yes| D[Success Response]
+    C -->|Timeout/5xx/Connection Error| E[Fallback Service]
+    C -->|4xx Client Error| F[Return Error]
+    E --> G{Fallback Available?}
+    G -->|Yes| H[Success Response]
+    G -->|No| I[Return Error]
+```
+
+### Integration Features
+
+- **Automatic ISO 8601 timestamp generation** for `requestedAt` field
+- **Comprehensive error handling** with custom `PaymentServiceError` class
+- **Detailed logging** for debugging and monitoring service usage
+- **Timeout configuration** for network requests
+- **JSON payload formatting** with correlation ID and amount
+
+## File Structure
+
+The payment service integration is organized into focused, maintainable modules:
+
+```
+app/services/
+├── payment_service_client.rb              # Backward compatibility wrapper
+├── payment_creation_service.rb            # Main payment creation logic
+└── payment_services/
+    ├── payment_service_error.rb           # Custom error class
+    ├── base_payment_service.rb            # Shared HTTP functionality
+    ├── default_payment_service.rb         # Primary payment service
+    ├── fallback_payment_service.rb        # Backup payment service
+    └── payment_service_router.rb          # Smart routing logic
+```
+
+### File Responsibilities
+
+| File | Purpose | Key Features |
+|------|---------|--------------|
+| `payment_service_error.rb` | Error handling | Status codes, response body tracking |
+| `base_payment_service.rb` | HTTP communication | Request building, response parsing, logging |
+| `default_payment_service.rb` | Primary service | Default payment service configuration |
+| `fallback_payment_service.rb` | Backup service | Fallback payment service configuration |
+| `payment_service_router.rb` | Smart routing | Automatic failover, error detection |
+| `payment_service_client.rb` | Compatibility | Backward compatibility for existing code |
+
+## Environment Configuration
+
+Configure the payment services using environment variables:
+
+### Required Environment Variables
+
+```bash
+# Default (Primary) Payment Service
+DEFAULT_PAYMENT_SERVICE_URL=https://api.defaultpayment.com
+
+# Fallback (Backup) Payment Service
+FALLBACK_PAYMENT_SERVICE_URL=https://api.fallbackpayment.com
+```
+
+### Default Values
+
+If environment variables are not set, the system uses these defaults:
+
+- **Default Service**: `https://api.defaultpayment.com`
+- **Fallback Service**: `https://api.fallbackpayment.com`
+
+### Configuration Examples
+
+```bash
+# Development
+export DEFAULT_PAYMENT_SERVICE_URL=https://sandbox-default.paymentprovider.com
+export FALLBACK_PAYMENT_SERVICE_URL=https://sandbox-fallback.paymentprovider.com
+
+# Production
+export DEFAULT_PAYMENT_SERVICE_URL=https://api.defaultpayment.com
+export FALLBACK_PAYMENT_SERVICE_URL=https://api.fallbackpayment.com
+
+# Testing
+export DEFAULT_PAYMENT_SERVICE_URL=https://test-default.paymentprovider.com
+export FALLBACK_PAYMENT_SERVICE_URL=https://test-fallback.paymentprovider.com
+```
 
 ## API Endpoints
 
 ### Create Payment
 
-Creates a new payment or returns existing payment if correlationId already exists.
+Creates a new payment or returns existing payment if correlationId already exists. Automatically registers with external payment service.
 
 ```bash
 POST /payments.json
@@ -133,6 +264,8 @@ Content-Type: application/json
   "url": "http://localhost:3000/payments/1.json"
 }
 ```
+
+**Note**: Payment is created locally first, then registered with external service. If external service fails, payment creation still succeeds (logged for retry).
 
 ### Get Payment
 
@@ -202,6 +335,7 @@ curl -X POST http://localhost:3000/payments.json \
 
 ```bash
 # Second request with same correlationId returns same payment
+# External service is NOT called again (idempotency)
 curl -X POST http://localhost:3000/payments.json \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
@@ -232,25 +366,73 @@ curl -X POST http://localhost:3000/payments.json \
 }
 ```
 
+### External Service Integration Example
+
+When a payment is created, the system automatically:
+
+1. **Creates local payment record**
+2. **Registers with default payment service**:
+   ```json
+   POST https://api.defaultpayment.com/payments
+   {
+     "correlationId": "550e8400-e29b-41d4-a716-446655440000",
+     "amount": 19.90,
+     "requestedAt": "2025-07-11T00:00:00.000Z"
+   }
+   ```
+3. **Falls back if needed**:
+   ```json
+   POST https://api.fallbackpayment.com/payments
+   {
+     "correlationId": "550e8400-e29b-41d4-a716-446655440000",
+     "amount": 19.90,
+     "requestedAt": "2025-07-11T00:00:00.000Z"
+   }
+   ```
+
 ## Testing
 
-The application includes comprehensive test coverage:
+The application includes comprehensive test coverage with WebMock for external service simulation:
 
 ```bash
 # Run all tests
 rails test
 
-# Run specific test file
+# Run specific test files
 rails test test/models/payment_test.rb
 rails test test/controllers/payments_controller_test.rb
+rails test test/services/payment_service_client_test.rb
+rails test test/services/payment_creation_service_test.rb
 ```
 
 **Test Coverage:**
-- 40 tests with 113 assertions
+- **70 tests with 217 assertions**
 - Model validations and methods
 - Controller actions (JSON and HTML)
 - Idempotency behavior
-- Edge cases and error handling
+- Payment service integration
+- Automatic fallback scenarios
+- Error handling and edge cases
+- WebMock stubs for external services
+
+### Payment Service Tests
+
+The payment service integration includes dedicated test suites:
+
+- **`PaymentServiceClientTest`**: Backward compatibility tests
+- **`PaymentServiceRouterTest`**: Smart routing and fallback logic
+- **`DefaultPaymentServiceTest`**: Primary service configuration
+- **`FallbackPaymentServiceTest`**: Backup service configuration
+
+Test scenarios include:
+- ✅ Successful payment registration with default service
+- ✅ Automatic fallback on server errors (5xx)
+- ✅ Automatic fallback on network timeouts
+- ✅ Automatic fallback on connection errors
+- ✅ No fallback for client errors (4xx)
+- ✅ Error handling when both services fail
+- ✅ Environment variable configuration
+- ✅ Service-specific URL handling
 
 ## Development
 
@@ -263,6 +445,49 @@ bundle install
 # Setup database
 rails db:create db:migrate
 
+# Set environment variables
+export DEFAULT_PAYMENT_SERVICE_URL=https://sandbox-default.paymentprovider.com
+export FALLBACK_PAYMENT_SERVICE_URL=https://sandbox-fallback.paymentprovider.com
+
 # Run the application
 rails server
+```
+
+### Monitoring Payment Services
+
+The application provides detailed logging for payment service operations:
+
+```ruby
+# Service selection
+Rails.logger.info "Attempting payment registration with default service"
+
+# Fallback events
+Rails.logger.warn "Default payment service unavailable, falling back to fallback service"
+
+# Request/response logging
+Rails.logger.info "Making POST request to https://api.defaultpayment.com/payments (DefaultPaymentService)"
+Rails.logger.info "Payment service response: 200 OK (DefaultPaymentService)"
+
+# Error logging
+Rails.logger.error "Payment service timeout (DefaultPaymentService): execution expired"
+```
+
+### Adding New Payment Services
+
+To add a new payment service:
+
+1. **Create service class** inheriting from `BasePaymentService`
+2. **Configure environment variable** for the service URL
+3. **Update router** to include the new service in failover chain
+4. **Add tests** for the new service integration
+
+Example:
+```ruby
+# app/services/payment_services/premium_payment_service.rb
+class PremiumPaymentService < BasePaymentService
+  def initialize(timeout: 30)
+    base_url = ENV["PREMIUM_PAYMENT_SERVICE_URL"] || "https://api.premiumpayment.com"
+    super(base_url: base_url, timeout: timeout)
+  end
+end
 ```
