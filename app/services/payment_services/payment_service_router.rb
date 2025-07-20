@@ -9,25 +9,27 @@ module PaymentServices
       @fallback_service = fallback_service || FallbackPaymentService.new
     end
 
-    def register_payment(correlation_id:, amount:, requested_at: nil)
+    def register_payment_with_service_info(correlation_id:, amount:, requested_at: nil)
       Rails.logger.info "Attempting payment registration with default service"
 
       begin
-        @default_service.register_payment(
+        result = @default_service.register_payment(
           correlation_id: correlation_id,
           amount: amount,
           requested_at: requested_at
         )
+        { result: result, service_used: "default" }
       rescue PaymentServiceError => e
         if service_unavailable?(e)
           Rails.logger.warn "Default payment service unavailable, falling back to fallback service"
           Rails.logger.debug "Default service error: #{e.message}"
 
-          @fallback_service.register_payment(
+          result = @fallback_service.register_payment(
             correlation_id: correlation_id,
             amount: amount,
             requested_at: requested_at
           )
+          { result: result, service_used: "fallback" }
         else
           # Re-raise the error if it's not a service availability issue
           raise e

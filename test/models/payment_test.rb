@@ -142,4 +142,28 @@ class PaymentTest < ActiveSupport::TestCase
     assert_equal 1999, payment.amount_in_cents  # Should round down
     assert_equal 19.99, payment.amount
   end
+
+  test "should allow nil payment_service" do
+    payment = Payment.new(amount: 19.99, correlation_id: "50505050-5050-5050-5050-505050505050")
+    assert payment.save
+    assert_nil payment.payment_service
+  end
+
+  test "should allow 'default' payment_service" do
+    payment = Payment.new(amount: 19.99, correlation_id: "60606060-6060-6060-6060-606060606060", payment_service: "default")
+    assert payment.save
+    assert_equal "default", payment.payment_service
+  end
+
+  test "should allow 'fallback' payment_service" do
+    payment = Payment.new(amount: 19.99, correlation_id: "70707070-7070-7070-7070-707070707070", payment_service: "fallback")
+    assert payment.save
+    assert_equal "fallback", payment.payment_service
+  end
+
+  test "should not allow invalid payment_service values" do
+    payment = Payment.new(amount: 19.99, correlation_id: "80808080-8080-8080-8080-808080808080", payment_service: "invalid")
+    assert_not payment.save
+    assert_includes payment.errors[:payment_service], "is not included in the list"
+  end
 end

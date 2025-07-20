@@ -10,7 +10,7 @@ class PaymentCreationServiceTest < ActiveSupport::TestCase
     Payment.where("correlation_id LIKE ?", "#{@base_correlation_id}%").delete_all
   end
 
-  test "creates new payment successfully with JSON params" do
+  test "creates new payment successfully with JSON params and calls external service" do
     correlation_id = @base_correlation_id + "1"
     params = {
       "correlationId" => correlation_id,
@@ -25,10 +25,14 @@ class PaymentCreationServiceTest < ActiveSupport::TestCase
     assert_not result.idempotent?
     assert_equal correlation_id, result.payment.correlation_id
     assert_equal @amount, result.payment.amount
+    assert_equal "default", result.payment.payment_service
     assert result.payment.persisted?
+
+    # Verify external service was called
+    assert_requested :post, "http://localhost:8001/payments", times: 1
   end
 
-  test "creates new payment successfully with HTML params" do
+  test "creates new payment successfully with HTML params and calls external service" do
     correlation_id = @base_correlation_id + "2"
     params = {
       payment: {
@@ -45,10 +49,14 @@ class PaymentCreationServiceTest < ActiveSupport::TestCase
     assert_not result.idempotent?
     assert_equal correlation_id, result.payment.correlation_id
     assert_equal @amount, result.payment.amount
+    assert_equal "default", result.payment.payment_service
     assert result.payment.persisted?
+
+    # Verify external service was called
+    assert_requested :post, "http://localhost:8001/payments", times: 1
   end
 
-  test "returns existing payment for duplicate correlation_id (idempotency)" do
+  test "returns existing payment for duplicate correlation_id (idempotency) without calling external service" do
     correlation_id = @base_correlation_id + "3"
 
     # Create initial payment
@@ -56,6 +64,24 @@ class PaymentCreationServiceTest < ActiveSupport::TestCase
       correlation_id: correlation_id,
       amount: @amount
     )
+
+    # Reset WebMock to clear any previous requests
+    WebMock.reset!
+
+    # Re-establish the default stubs since we reset WebMock
+    stub_request(:post, "http://localhost:8001/payments")
+      .to_return(
+        status: 200,
+        body: { message: "payment processed successfully" }.to_json,
+        headers: { "Content-Type" => "application/json" }
+      )
+
+    stub_request(:post, "http://localhost:8002/payments")
+      .to_return(
+        status: 200,
+        body: { message: "payment processed successfully" }.to_json,
+        headers: { "Content-Type" => "application/json" }
+      )
 
     params = {
       "correlationId" => correlation_id,
@@ -70,6 +96,11 @@ class PaymentCreationServiceTest < ActiveSupport::TestCase
     assert result.idempotent?
     assert_equal existing_payment.id, result.payment.id
     assert_equal @amount, result.payment.amount  # Should keep original amount
+    assert_nil result.payment.payment_service  # Should not be set for existing payments
+
+    # Verify external service was NOT called
+    assert_not_requested :post, "http://localhost:8001/payments"
+    assert_not_requested :post, "http://localhost:8002/payments"
   end
 
   test "returns errors for invalid payment" do
@@ -146,7 +177,124 @@ class PaymentCreationServiceTest < ActiveSupport::TestCase
     assert result.success?
     assert result.newly_created
     assert_equal 25.50, result.payment.amount
+    assert_equal "default", result.payment.payment_service
     assert result.payment.persisted?
+  end
+
+  test "sets payment_service to 'default' when default service is used" do
+    correlation_id = @base_correlation_id + "6"
+    params = {
+      "correlationId" => correlation_id,
+      "amount" => @amount
+    }
+
+    service = PaymentCreationService.new(params: params, request_format: double_json_format)
+    result = service.call
+
+    assert result.success?
+    assert result.newly_created
+    assert_equal "default", result.payment.payment_service
+  end
+
+  test "sets payment_service to 'fallback' when fallback service is used" do
+    correlation_id = @base_correlation_id + "7"
+    params = {
+      "correlationId" => correlation_id,
+      "amount" => @amount
+    }
+
+    # Stub the default service to fail with a timeout (service unavailable)
+    WebMock.reset!
+    stub_request(:post, "http://localhost:8001/payments")
+      .to_timeout
+
+    # Stub the fallback service to succeed
+    stub_request(:post, "http://localhost:8002/payments")
+      .with(
+        body: hash_including({
+          "correlationId" => correlation_id,
+          "amount" => @amount
+        }),
+        headers: {
+          "Content-Type" => "application/json",
+          "Accept" => "application/json",
+          "User-Agent" => "PaymentProcessor/1.0"
+        }
+      )
+      .to_return(status: 200, body: { success: true }.to_json)
+
+    service = PaymentCreationService.new(params: params, request_format: double_json_format)
+    result = service.call
+
+    assert result.success?
+    assert result.newly_created
+    assert_equal "fallback", result.payment.payment_service
+  end
+
+  test "does not set payment_service for existing payments (idempotency)" do
+    correlation_id = @base_correlation_id + "8"
+
+    # Create initial payment without payment_service
+    existing_payment = Payment.create!(
+      correlation_id: correlation_id,
+      amount: @amount
+    )
+    assert_nil existing_payment.payment_service
+
+    params = {
+      "correlationId" => correlation_id,
+      "amount" => @amount
+    }
+
+    service = PaymentCreationService.new(params: params, request_format: double_json_format)
+    result = service.call
+
+    assert result.success?
+    assert_not result.newly_created
+    assert result.idempotent?
+    assert_equal existing_payment.id, result.payment.id
+    # Should still be nil since we didn't register with external service
+    assert_nil result.payment.payment_service
+  end
+
+  test "payment creation succeeds even if external service registration fails" do
+    correlation_id = @base_correlation_id + "9"
+    params = {
+      "correlationId" => correlation_id,
+      "amount" => @amount
+    }
+
+    # Stub all external services to fail with non-retryable errors
+    WebMock.reset!
+    stub_request(:post, "http://localhost:8001/payments")
+      .to_return(status: 400, body: { error: "Bad request" }.to_json)
+
+    service = PaymentCreationService.new(params: params, request_format: double_json_format)
+    result = service.call
+
+    # Payment creation should still succeed even if external service fails
+    assert result.success?
+    assert result.newly_created
+    assert result.payment.persisted?
+    assert_equal correlation_id, result.payment.correlation_id
+    assert_equal @amount, result.payment.amount
+    # payment_service might be nil if external registration failed
+  end
+
+  test "stores amount correctly in cents internally" do
+    correlation_id = @base_correlation_id + "0"
+    amount_dollars = 12.34
+    params = {
+      "correlationId" => correlation_id,
+      "amount" => amount_dollars
+    }
+
+    service = PaymentCreationService.new(params: params, request_format: double_json_format)
+    result = service.call
+
+    assert result.success?, "Expected payment creation to succeed, but got errors: #{result.errors}"
+    assert_equal amount_dollars, result.payment.amount
+    assert_equal 1234, result.payment.amount_in_cents
   end
 
   private

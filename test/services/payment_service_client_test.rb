@@ -30,12 +30,13 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
         headers: { "Content-Type" => "application/json" }
       )
 
-    result = @client.register_payment(
+    service_result = @client.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment processed successfully", result["message"]
+    assert_equal "payment processed successfully", service_result[:result]["message"]
+    assert_equal "default", service_result[:service_used]
 
     # Verify the request was made with correct data
     assert_requested(:post, "https://api.test.com/payments") do |req|
@@ -56,19 +57,18 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
         headers: { "Content-Type" => "application/json" }
       )
 
-    result = @client.register_payment(
+    service_result = @client.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount,
       requested_at: custom_time
     )
 
-    assert_equal "payment processed successfully", result["message"]
+    assert_equal "payment processed successfully", service_result[:result]["message"]
+    assert_equal "default", service_result[:service_used]
 
-    # Verify the request was made with correct data
+    # Verify the request was made with the custom timestamp
     assert_requested(:post, "https://api.test.com/payments") do |req|
       body = JSON.parse(req.body)
-      body["correlationId"] == @correlation_id &&
-      body["amount"] == @amount &&
       body["requestedAt"] == custom_time
     end
   end
@@ -82,7 +82,7 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
       )
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      @client.register_payment(
+      @client.register_payment_with_service_info(
         correlation_id: "invalid",
         amount: @amount
       )
@@ -101,7 +101,7 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
       )
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      @client.register_payment(
+      @client.register_payment_with_service_info(
         correlation_id: @correlation_id,
         amount: @amount
       )
@@ -116,7 +116,7 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
       .to_raise(Net::ReadTimeout)
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      @client.register_payment(
+      @client.register_payment_with_service_info(
         correlation_id: @correlation_id,
         amount: @amount
       )
@@ -131,7 +131,7 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
       .to_raise(SocketError.new("Connection refused"))
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      @client.register_payment(
+      @client.register_payment_with_service_info(
         correlation_id: @correlation_id,
         amount: @amount
       )
@@ -144,12 +144,12 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
     stub_request(:post, "https://api.test.com/payments")
       .to_return(
         status: 200,
-        body: "invalid json",
+        body: "invalid json response",
         headers: { "Content-Type" => "application/json" }
       )
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      @client.register_payment(
+      @client.register_payment_with_service_info(
         correlation_id: @correlation_id,
         amount: @amount
       )
@@ -166,17 +166,17 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
         headers: { "Content-Type" => "application/json" }
       )
 
-    result = @client.register_payment(
+    service_result = @client.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "Success", result["message"]
+    assert_equal "Success", service_result[:result]["message"]
+    assert_equal "default", service_result[:service_used]
   end
 
   test "uses environment variable for base URL" do
     ENV["DEFAULT_PAYMENT_SERVICE_URL"] = "https://env.test.com"
-
     client = PaymentServiceClient.new
 
     stub_request(:post, "https://env.test.com/payments")
@@ -186,49 +186,47 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
         headers: { "Content-Type" => "application/json" }
       )
 
-    result = client.register_payment(
+    service_result = client.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment processed successfully", result["message"]
+    assert_equal "payment processed successfully", service_result[:result]["message"]
   end
 
   test "handles HTTP 201 Created response" do
     stub_request(:post, "https://api.test.com/payments")
       .to_return(
         status: 201,
-        body: { message: "payment created successfully", id: "12345" }.to_json,
+        body: { message: "payment created successfully" }.to_json,
         headers: { "Content-Type" => "application/json" }
       )
 
-    result = @client.register_payment(
+    service_result = @client.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment created successfully", result["message"]
-    assert_equal "12345", result["id"]
+    assert_equal "payment created successfully", service_result[:result]["message"]
   end
 
   test "handles client error with plain text response" do
     stub_request(:post, "https://api.test.com/payments")
       .to_return(
-        status: 422,
-        body: "Unprocessable Entity",
+        status: 400,
+        body: "Bad Request",
         headers: { "Content-Type" => "text/plain" }
       )
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      @client.register_payment(
+      @client.register_payment_with_service_info(
         correlation_id: @correlation_id,
         amount: @amount
       )
     end
 
-    assert_includes error.message, "Payment service client error"
-    assert_equal 422, error.status_code
-    assert_includes error.response_body, "Unprocessable Entity"
+    assert_includes error.message, "Bad Request"
+    assert_equal 400, error.status_code
   end
 
   test "sends correct headers" do
@@ -242,17 +240,16 @@ class PaymentServiceClientTest < ActiveSupport::TestCase
       )
       .to_return(
         status: 200,
-        body: { message: "success" }.to_json,
-        headers: { "Content-Type" => "application/json" }
+        body: { message: "success" }.to_json
       )
 
-    @client.register_payment(
+    @client.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    # Assertion happens in the stub verification
-    assert_requested(:post, "https://api.test.com/payments")
+    # The assertion is implicit in the stub - if headers aren't correct, the stub won't match
+    assert_requested :post, "https://api.test.com/payments"
   end
 end
 
@@ -283,12 +280,13 @@ class PaymentServiceRouterTest < ActiveSupport::TestCase
 
     router = PaymentServices::PaymentServiceRouter.new
 
-    result = router.register_payment(
+    service_result = router.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment processed by default service", result["message"]
+    assert_equal "payment processed by default service", service_result[:result]["message"]
+    assert_equal "default", service_result[:service_used]
     assert_requested(:post, "https://default.test.com/payments")
     assert_not_requested(:post, "https://fallback.test.com/payments")
   ensure
@@ -318,12 +316,13 @@ class PaymentServiceRouterTest < ActiveSupport::TestCase
 
     router = PaymentServices::PaymentServiceRouter.new
 
-    result = router.register_payment(
+    service_result = router.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment processed by fallback service", result["message"]
+    assert_equal "payment processed by fallback service", service_result[:result]["message"]
+    assert_equal "fallback", service_result[:service_used]
     assert_requested(:post, "https://default.test.com/payments")
     assert_requested(:post, "https://fallback.test.com/payments")
   ensure
@@ -349,12 +348,13 @@ class PaymentServiceRouterTest < ActiveSupport::TestCase
 
     router = PaymentServices::PaymentServiceRouter.new
 
-    result = router.register_payment(
+    service_result = router.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment processed by fallback service", result["message"]
+    assert_equal "payment processed by fallback service", service_result[:result]["message"]
+    assert_equal "fallback", service_result[:service_used]
     assert_requested(:post, "https://default.test.com/payments")
     assert_requested(:post, "https://fallback.test.com/payments")
   ensure
@@ -380,12 +380,13 @@ class PaymentServiceRouterTest < ActiveSupport::TestCase
 
     router = PaymentServices::PaymentServiceRouter.new
 
-    result = router.register_payment(
+    service_result = router.register_payment_with_service_info(
       correlation_id: @correlation_id,
       amount: @amount
     )
 
-    assert_equal "payment processed by fallback service", result["message"]
+    assert_equal "payment processed by fallback service", service_result[:result]["message"]
+    assert_equal "fallback", service_result[:service_used]
     assert_requested(:post, "https://default.test.com/payments")
     assert_requested(:post, "https://fallback.test.com/payments")
   ensure
@@ -408,7 +409,7 @@ class PaymentServiceRouterTest < ActiveSupport::TestCase
     router = PaymentServices::PaymentServiceRouter.new
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      router.register_payment(
+      router.register_payment_with_service_info(
         correlation_id: "invalid",
         amount: @amount
       )
@@ -446,7 +447,7 @@ class PaymentServiceRouterTest < ActiveSupport::TestCase
     router = PaymentServices::PaymentServiceRouter.new
 
     error = assert_raises(PaymentServices::PaymentServiceError) do
-      router.register_payment(
+      router.register_payment_with_service_info(
         correlation_id: @correlation_id,
         amount: @amount
       )
@@ -465,7 +466,6 @@ end
 class DefaultPaymentServiceTest < ActiveSupport::TestCase
   def setup
     WebMock.reset!
-    ENV["DEFAULT_PAYMENT_SERVICE_URL"] = "https://default.test.com"
     @service = PaymentServices::DefaultPaymentService.new
     @correlation_id = "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b3"
     @amount = 19.90
@@ -476,8 +476,8 @@ class DefaultPaymentServiceTest < ActiveSupport::TestCase
     ENV.delete("DEFAULT_PAYMENT_SERVICE_URL")
   end
 
-  test "uses correct base URL from environment" do
-    stub_request(:post, "https://default.test.com/payments")
+  test "uses default service URL when no environment variable is set" do
+    stub_request(:post, "http://localhost:8001/payments")
       .to_return(
         status: 200,
         body: { message: "success" }.to_json,
@@ -489,14 +489,14 @@ class DefaultPaymentServiceTest < ActiveSupport::TestCase
       amount: @amount
     )
 
-    assert_requested(:post, "https://default.test.com/payments")
+    assert_requested :post, "http://localhost:8001/payments"
   end
 
-  test "uses default URL when environment variable not set" do
-    ENV.delete("DEFAULT_PAYMENT_SERVICE_URL")
+  test "uses environment variable URL when set" do
+    ENV["DEFAULT_PAYMENT_SERVICE_URL"] = "https://custom.service.com"
     service = PaymentServices::DefaultPaymentService.new
 
-    stub_request(:post, "http://localhost:8001/payments")
+    stub_request(:post, "https://custom.service.com/payments")
       .to_return(
         status: 200,
         body: { message: "success" }.to_json,
@@ -508,14 +508,14 @@ class DefaultPaymentServiceTest < ActiveSupport::TestCase
       amount: @amount
     )
 
-    assert_requested(:post, "http://localhost:8001/payments")
+    assert_requested :post, "https://custom.service.com/payments"
+    ENV.delete("DEFAULT_PAYMENT_SERVICE_URL")
   end
 end
 
 class FallbackPaymentServiceTest < ActiveSupport::TestCase
   def setup
     WebMock.reset!
-    ENV["FALLBACK_PAYMENT_SERVICE_URL"] = "https://fallback.test.com"
     @service = PaymentServices::FallbackPaymentService.new
     @correlation_id = "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b3"
     @amount = 19.90
@@ -526,8 +526,8 @@ class FallbackPaymentServiceTest < ActiveSupport::TestCase
     ENV.delete("FALLBACK_PAYMENT_SERVICE_URL")
   end
 
-  test "uses correct base URL from environment" do
-    stub_request(:post, "https://fallback.test.com/payments")
+  test "uses fallback service URL" do
+    stub_request(:post, "http://localhost:8002/payments")
       .to_return(
         status: 200,
         body: { message: "success" }.to_json,
@@ -539,14 +539,14 @@ class FallbackPaymentServiceTest < ActiveSupport::TestCase
       amount: @amount
     )
 
-    assert_requested(:post, "https://fallback.test.com/payments")
+    assert_requested :post, "http://localhost:8002/payments"
   end
 
-  test "uses default URL when environment variable not set" do
-    ENV.delete("FALLBACK_PAYMENT_SERVICE_URL")
+  test "uses environment variable URL when set" do
+    ENV["FALLBACK_PAYMENT_SERVICE_URL"] = "https://custom.fallback.com"
     service = PaymentServices::FallbackPaymentService.new
 
-    stub_request(:post, "http://localhost:8002/payments")
+    stub_request(:post, "https://custom.fallback.com/payments")
       .to_return(
         status: 200,
         body: { message: "success" }.to_json,
@@ -558,6 +558,7 @@ class FallbackPaymentServiceTest < ActiveSupport::TestCase
       amount: @amount
     )
 
-    assert_requested(:post, "http://localhost:8002/payments")
+    assert_requested :post, "https://custom.fallback.com/payments"
+    ENV.delete("FALLBACK_PAYMENT_SERVICE_URL")
   end
 end

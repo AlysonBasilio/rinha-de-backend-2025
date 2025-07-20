@@ -80,13 +80,16 @@ class PaymentCreationService
     return unless payment.persisted?
 
     client = PaymentServiceClient.new
-    client.register_payment(
+    service_result = client.register_payment_with_service_info(
       correlation_id: payment.correlation_id,
       amount: payment.amount,
       requested_at: payment.created_at.iso8601(3)
     )
 
-    Rails.logger.info "Payment #{payment.id} successfully registered with external service"
+    # Update payment with the service that was used
+    payment.update!(payment_service: service_result[:service_used])
+
+    Rails.logger.info "Payment #{payment.id} successfully registered with external service (#{service_result[:service_used]})"
 
   rescue PaymentServices::PaymentServiceError => e
     Rails.logger.error "Failed to register payment #{payment.id} with external service: #{e.message}"

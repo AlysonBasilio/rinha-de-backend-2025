@@ -1,6 +1,6 @@
 # Payment Processor API
 
-A Rails 8 application that provides a secure, idempotent payment processing API with precise money handling, robust validation, and external payment service integration with automatic fallback capabilities.
+A Rails 8 application that provides a secure, idempotent payment processing API with precise money handling, robust validation, and external payment service integration with automatic fallback capabilities and service usage tracking.
 
 ## Table of Contents
 
@@ -22,6 +22,7 @@ The Payment Processor API provides both JSON and HTML interfaces for creating, r
 - **Idempotent operations** using correlation IDs
 - **Precise money handling** using integer cents
 - **External payment service integration** with automatic fallback
+- **Payment service tracking** to monitor which service handled each payment
 - **Comprehensive validation**
 - **Dual format support** (JSON API + HTML forms)
 
@@ -68,9 +69,20 @@ The Payment Processor API provides both JSON and HTML interfaces for creating, r
 - **Transparency**: Same API interface regardless of which service is used
 - **Monitoring**: Detailed logging for service selection and fallback events
 
+### 5. Payment Service Tracking
+
+**Decision**: Track which payment service (default or fallback) was used for each payment.
+
+**Reasoning**:
+- **Cost Analysis**: Monitor usage patterns to optimize service costs
+- **Performance Monitoring**: Identify fallback frequency and service reliability
+- **Audit Trail**: Maintain records of which external service processed each payment
+- **Business Intelligence**: Enable reporting on service usage and effectiveness
+- **Troubleshooting**: Facilitate debugging by knowing which service handled specific payments
+
 ## Payment Service Integration
 
-The application integrates with external payment services using a sophisticated routing system that automatically handles failover between default and fallback services.
+The application integrates with external payment services using a sophisticated routing system that automatically handles failover between default and fallback services while tracking which service was used.
 
 ### Service Architecture
 
@@ -80,6 +92,14 @@ PaymentServiceRouter
 └── FallbackPaymentService (Backup - More Expensive)
 ```
 
+### Service Usage Tracking
+
+Every successful payment registration records which service was used:
+
+- **`payment_service: 'default'`**: Payment was processed by the primary service
+- **`payment_service: 'fallback'`**: Payment was processed by the backup service
+- **`payment_service: null`**: Payment exists but external service registration failed or was not attempted (e.g., for duplicate requests)
+
 ### Automatic Fallback Logic
 
 1. **Primary Attempt**: All requests start with the default service
@@ -88,7 +108,8 @@ PaymentServiceRouter
    - Connection errors (`SocketError`, `Net::HTTPError`)
    - Server errors (HTTP 5xx status codes)
 3. **Automatic Fallback**: Transparently switches to fallback service
-4. **Error Propagation**: Client errors (4xx) are immediately returned without fallback
+4. **Service Tracking**: Records which service successfully processed the payment
+5. **Error Propagation**: Client errors (4xx) are immediately returned without fallback
 
 ### Service Selection Flow
 
@@ -96,11 +117,11 @@ PaymentServiceRouter
 graph TD
     A[Payment Request] --> B[Default Service]
     B --> C{Service Available?}
-    C -->|Yes| D[Success Response]
+    C -->|Yes| D[Success Response + Mark as 'default']
     C -->|Timeout/5xx/Connection Error| E[Fallback Service]
     C -->|4xx Client Error| F[Return Error]
     E --> G{Fallback Available?}
-    G -->|Yes| H[Success Response]
+    G -->|Yes| H[Success Response + Mark as 'fallback']
     G -->|No| I[Return Error]
 ```
 
@@ -165,6 +186,20 @@ Content-Type: application/json
   "updated_at": "2025-07-11T00:00:00.000Z",
   "correlationId": "550e8400-e29b-41d4-a716-446655440000",
   "amount": 19.90,
+  "payment_service": "default",
+  "url": "http://localhost:3000/payments/1.json"
+}
+```
+
+**Idempotent Response** (200 OK for existing payment):
+```json
+{
+  "id": 1,
+  "created_at": "2025-07-11T00:00:00.000Z",
+  "updated_at": "2025-07-11T00:00:00.000Z",
+  "correlationId": "550e8400-e29b-41d4-a716-446655440000",
+  "amount": 19.90,
+  "payment_service": "default",
   "url": "http://localhost:3000/payments/1.json"
 }
 ```
@@ -178,6 +213,7 @@ Content-Type: application/json
 | `id` | Integer | Primary key | Auto-generated |
 | `amount_in_cents` | Integer | Amount in cents | Required, > 0 |
 | `correlation_id` | String | UUID for idempotency | Required, unique, UUID format |
+| `payment_service` | String | Service used ('default', 'fallback', or null) | Optional, must be 'default' or 'fallback' if present |
 | `created_at` | DateTime | Creation timestamp | Auto-generated |
 | `updated_at` | DateTime | Last update timestamp | Auto-generated |
 
@@ -189,6 +225,12 @@ Content-Type: application/json
 | `amount=(dollars)` | Sets amount from dollars | `payment.amount = 19.90` |
 | `formatted_amount` | Returns formatted currency | `"$19.90"` |
 
+### Payment Service Field Values
+
+- **`'default'`**: Payment was successfully registered with the primary payment service
+- **`'fallback'`**: Payment was successfully registered with the backup payment service
+- **`null`**: Payment was created but external service registration was not completed (idempotent requests or service failures)
+
 ## Testing
 
 The application includes comprehensive test coverage with WebMock for external service simulation:
@@ -196,7 +238,20 @@ The application includes comprehensive test coverage with WebMock for external s
 ```bash
 # Run all tests
 rails test
+
+# Run specific test files
+rails test test/models/payment_test.rb
+rails test test/services/payment_creation_service_test.rb
 ```
+
+### Test Coverage
+
+- **Model Validation**: Payment field validation including payment_service constraints
+- **Service Integration**: External payment service registration with both default and fallback services
+- **Fallback Logic**: Automatic service switching during outages
+- **Service Tracking**: Verification that the correct service is recorded for each payment
+- **Idempotency**: Ensuring duplicate requests don't trigger additional service calls
+- **Error Handling**: Payment creation success even when external services fail
 
 ## Development
 

@@ -4,6 +4,7 @@ class Payment < ApplicationRecord
     message: "must be a valid UUID"
   }
   validates :amount_in_cents, presence: true, numericality: { greater_than: 0 }
+  validates :payment_service, inclusion: { in: [ "default", "fallback" ] }, allow_nil: true
 
   # Helper method to get amount in dollars
   def amount
