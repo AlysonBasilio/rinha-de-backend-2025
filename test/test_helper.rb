@@ -18,22 +18,14 @@ module ActiveSupport
       super
 
       # Stub default payment service API calls
-      stub_request(:post, "https://api.defaultpayment.com/payments")
+      stub_request(:post, "http://localhost:8001/payments")
         .to_return(
           status: 200,
           body: { message: "payment processed successfully" }.to_json,
           headers: { "Content-Type" => "application/json" }
         )
 
-      stub_request(:post, "https://api.fallbackpayment.com/payments")
-        .to_return(
-          status: 200,
-          body: { message: "payment processed successfully" }.to_json,
-          headers: { "Content-Type" => "application/json" }
-        )
-
-      # Keep the original stub for backward compatibility
-      stub_request(:post, "https://api.paymentservice.com/payments")
+      stub_request(:post, "http://localhost:8002/payments")
         .to_return(
           status: 200,
           body: { message: "payment processed successfully" }.to_json,

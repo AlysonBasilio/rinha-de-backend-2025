@@ -496,7 +496,7 @@ class DefaultPaymentServiceTest < ActiveSupport::TestCase
     ENV.delete("DEFAULT_PAYMENT_SERVICE_URL")
     service = PaymentServices::DefaultPaymentService.new
 
-    stub_request(:post, "https://api.defaultpayment.com/payments")
+    stub_request(:post, "http://localhost:8001/payments")
       .to_return(
         status: 200,
         body: { message: "success" }.to_json,
@@ -508,7 +508,7 @@ class DefaultPaymentServiceTest < ActiveSupport::TestCase
       amount: @amount
     )
 
-    assert_requested(:post, "https://api.defaultpayment.com/payments")
+    assert_requested(:post, "http://localhost:8001/payments")
   end
 end
 
@@ -546,7 +546,7 @@ class FallbackPaymentServiceTest < ActiveSupport::TestCase
     ENV.delete("FALLBACK_PAYMENT_SERVICE_URL")
     service = PaymentServices::FallbackPaymentService.new
 
-    stub_request(:post, "https://api.fallbackpayment.com/payments")
+    stub_request(:post, "http://localhost:8002/payments")
       .to_return(
         status: 200,
         body: { message: "success" }.to_json,
@@ -558,6 +558,6 @@ class FallbackPaymentServiceTest < ActiveSupport::TestCase
       amount: @amount
     )
 
-    assert_requested(:post, "https://api.fallbackpayment.com/payments")
+    assert_requested(:post, "http://localhost:8002/payments")
   end
 end
