@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+
+require "bundler/setup"
+
+# Add the scripts directory to the load path
+scripts_dir = File.expand_path("../scripts", __dir__)
+$LOAD_PATH.unshift(scripts_dir) unless $LOAD_PATH.include?(scripts_dir)
+
+# Load and run the performance test
+load File.join(scripts_dir, "payment_performance_test.rb")
