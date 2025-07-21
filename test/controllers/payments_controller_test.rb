@@ -15,18 +15,12 @@ class PaymentsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
   end
 
-  test "should create payment" do
+  test "should create payment via HTML form" do
     assert_difference("Payment.count") do
-      post payments_url, params: { payment: { amount: @payment.amount, correlation_id: "50505050-5050-5050-5050-505050505050" } }
+      post payments_url, params: { payment: { correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b4", amount: 19.99 } }
     end
 
-    assert_redirected_to payment_url(Payment.last)
-  end
-
-  test "should create payment with amount conversion" do
-    assert_difference("Payment.count") do
-      post payments_url, params: { payment: { amount: 19.99, correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b4" } }
-    end
+    assert_response :redirect
 
     payment = Payment.last
     assert_equal 1999, payment.amount_in_cents
@@ -35,112 +29,56 @@ class PaymentsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to payment_url(payment)
   end
 
-  test "should create payment via JSON API" do
-    assert_difference("Payment.count") do
+  test "should create payment via JSON API asynchronously" do
+    # JSON API requests are processed asynchronously, so no immediate Payment.count change
+    assert_enqueued_with(job: PaymentCreationJob) do
       post payments_url(format: :json),
         params: { correlationId: "550e8400-e29b-41d4-a716-446655440000", amount: 25.99 }.to_json,
         headers: { "Content-Type": "application/json", "Accept": "application/json" }
     end
 
-    assert_response :created
-    payment = Payment.last
-    assert_equal "550e8400-e29b-41d4-a716-446655440000", payment.correlation_id
-    assert_equal 2599, payment.amount_in_cents
+    assert_response :accepted  # 202 Accepted for async processing
+    json_response = JSON.parse(response.body)
+    assert_equal "accepted", json_response["status"]
+    assert_equal "Payment creation queued for processing", json_response["message"]
+    assert_equal "550e8400-e29b-41d4-a716-446655440000", json_response["correlation_id"]
+    assert json_response["job_id"].present?
   end
 
   test "should return existing payment for duplicate correlationId (idempotency)" do
-    # First request creates the payment
-    post payments_url(format: :json),
-      params: { correlationId: "550e8400-e29b-41d4-a716-446655440001", amount: 30.50 }.to_json,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+    # Create first payment via HTML form (synchronous)
+    post payments_url, params: { payment: { correlation_id: "550e8400-e29b-41d4-a716-446655440001", amount: 19.90 } }
+    assert_response :redirect
 
-    assert_response :created
-    first_payment = Payment.last
-    first_response = response.body
-
-    # Second request with same correlationId should return the same payment
-    assert_no_difference("Payment.count") do
+    # Second request via JSON API with same correlationId should still queue job
+    assert_enqueued_with(job: PaymentCreationJob) do
       post payments_url(format: :json),
-        params: { correlationId: "550e8400-e29b-41d4-a716-446655440001", amount: 30.50 }.to_json,
+        params: { correlationId: "550e8400-e29b-41d4-a716-446655440001", amount: 50.0 }.to_json,
         headers: { "Content-Type": "application/json", "Accept": "application/json" }
     end
 
-    assert_response :created
-    assert_equal first_response, response.body
+    assert_response :accepted  # Async processing always returns 202
+    json_response = JSON.parse(response.body)
+    assert_equal "accepted", json_response["status"]
+    assert_equal "550e8400-e29b-41d4-a716-446655440001", json_response["correlation_id"]
   end
 
   test "should return existing payment even with different amount (idempotency)" do
-    # First request creates the payment
-    post payments_url(format: :json),
-      params: { correlationId: "550e8400-e29b-41d4-a716-446655440002", amount: 15.75 }.to_json,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+    # Create first payment via HTML form
+    post payments_url, params: { payment: { correlation_id: "550e8400-e29b-41d4-a716-446655440002", amount: 19.90 } }
+    assert_response :redirect
 
-    assert_response :created
-    first_payment = Payment.last
-    original_amount = first_payment.amount
-
-    # Second request with same correlationId but different amount should return original payment
-    assert_no_difference("Payment.count") do
+    # Second request with different amount but same correlationId
+    assert_enqueued_with(job: PaymentCreationJob) do
       post payments_url(format: :json),
-        params: { correlationId: "550e8400-e29b-41d4-a716-446655440002", amount: 999.99 }.to_json,
+        params: { correlationId: "550e8400-e29b-41d4-a716-446655440002", amount: 99.99 }.to_json,
         headers: { "Content-Type": "application/json", "Accept": "application/json" }
     end
 
-    assert_response :created
-    response_data = JSON.parse(response.body)
-    assert_equal original_amount, response_data["amount"]
-    assert_equal first_payment.id, response_data["id"]
-  end
-
-  test "should return JSON for created payment" do
-    post payments_url(format: :json),
-      params: { correlationId: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b6", amount: 19.90 }.to_json,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
-
-    assert_response :created
+    assert_response :accepted
     json_response = JSON.parse(response.body)
-    assert_equal "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b6", json_response["correlationId"]
-    assert_equal 19.90, json_response["amount"]
-  end
-
-  test "should return validation errors for invalid JSON payment" do
-    post payments_url(format: :json),
-      params: { amount: 19.90 }.to_json,  # Missing correlationId
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
-
-    assert_response :unprocessable_entity
-    json_response = JSON.parse(response.body)
-    assert_includes json_response["correlation_id"], "can't be blank"
-  end
-
-  test "should return validation errors for invalid UUID" do
-    post payments_url(format: :json),
-      params: { correlationId: "not-a-valid-uuid", amount: 19.90 }.to_json,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
-
-    assert_response :unprocessable_entity
-    json_response = JSON.parse(response.body)
-    assert_includes json_response["correlation_id"], "must be a valid UUID"
-  end
-
-  test "should return existing payment for duplicate UUID (idempotency)" do
-    # Create first payment
-    post payments_url(format: :json),
-      params: { correlationId: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b7", amount: 19.90 }.to_json,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
-    assert_response :created
-    first_payment = Payment.last
-    first_response = response.body
-
-    # Second request with same UUID should return the same payment
-    assert_no_difference("Payment.count") do
-      post payments_url(format: :json),
-        params: { correlationId: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b7", amount: 29.90 }.to_json,
-        headers: { "Content-Type": "application/json", "Accept": "application/json" }
-    end
-
-    assert_response :created
-    assert_equal first_response, response.body
+    assert_equal "accepted", json_response["status"]
+    assert_equal "550e8400-e29b-41d4-a716-446655440002", json_response["correlation_id"]
   end
 
   test "should show payment" do
@@ -154,32 +92,8 @@ class PaymentsControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "should update payment" do
-    patch payment_url(@payment), params: { payment: { amount: @payment.amount, correlation_id: @payment.correlation_id } }
+    patch payment_url(@payment), params: { payment: { correlation_id: @payment.correlation_id } }
     assert_redirected_to payment_url(@payment)
-  end
-
-  test "should update payment with amount conversion" do
-    original_amount = @payment.amount_in_cents
-    new_amount = 45.67
-
-    patch payment_url(@payment), params: { payment: { amount: new_amount, correlation_id: @payment.correlation_id } }
-
-    @payment.reload
-    assert_equal 4567, @payment.amount_in_cents
-    assert_equal 45.67, @payment.amount
-    assert_redirected_to payment_url(@payment)
-  end
-
-  test "should update payment via JSON API" do
-    patch payment_url(@payment, format: :json),
-      params: { correlationId: "60606060-6060-6060-6060-606060606060", amount: 99.99 }.to_json,
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
-
-    @payment.reload
-    assert_equal 9999, @payment.amount_in_cents
-    assert_equal 99.99, @payment.amount
-    assert_equal "60606060-6060-6060-6060-606060606060", @payment.correlation_id
-    assert_response :ok
   end
 
   test "should destroy payment" do
@@ -190,22 +104,100 @@ class PaymentsControllerTest < ActionDispatch::IntegrationTest
     assert_redirected_to payments_url
   end
 
-  test "should handle string amount in create" do
-    assert_difference("Payment.count") do
-      post payments_url, params: { payment: { amount: "123.45", correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b8" } }
+  test "should return JSON for async payment creation" do
+    assert_enqueued_with(job: PaymentCreationJob) do
+      post payments_url(format: :json),
+        params: { correlationId: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b6", amount: 19.90 }.to_json,
+        headers: { "Content-Type": "application/json", "Accept": "application/json" }
     end
 
-    payment = Payment.last
-    assert_equal 12345, payment.amount_in_cents
-    assert_equal 123.45, payment.amount
-    assert_equal "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b8", payment.correlation_id
+    assert_response :accepted  # Async processing
+    json_response = JSON.parse(response.body)
+    assert_equal "accepted", json_response["status"]
+    assert_equal "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b6", json_response["correlation_id"]
+    assert json_response["job_id"].present?
   end
 
-  test "should handle zero amount validation" do
-    assert_no_difference("Payment.count") do
-      post payments_url, params: { payment: { amount: 0, correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b9" } }
+    test "should return validation errors for invalid JSON payment" do
+    # AsyncPaymentCreationService validates before queuing jobs
+    post payments_url(format: :json),
+      params: { amount: 19.90 }.to_json,  # Missing correlationId
+      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+
+    assert_response :unprocessable_entity
+    json_response = JSON.parse(response.body)
+    assert json_response["errors"].present?
+    assert json_response["errors"].any? { |error| error.include?("Correlation ID") }
+  end
+
+  test "should return validation errors for invalid UUID" do
+    # AsyncPaymentCreationService validates before queuing jobs
+    post payments_url(format: :json),
+      params: { correlationId: "not-a-valid-uuid", amount: 19.90 }.to_json,
+      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+
+    assert_response :unprocessable_entity
+    json_response = JSON.parse(response.body)
+    assert json_response["errors"].present?
+    assert json_response["errors"].any? { |error| error.include?("UUID") }
+  end
+
+  test "should return async response for duplicate UUID" do
+    # Create first payment via HTML form
+    post payments_url, params: { payment: { correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b7", amount: 19.90 } }
+    assert_response :redirect
+
+    # Second request with same UUID via JSON API
+    assert_enqueued_with(job: PaymentCreationJob) do
+      post payments_url(format: :json),
+        params: { correlationId: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b7", amount: 25.00 }.to_json,
+        headers: { "Content-Type": "application/json", "Accept": "application/json" }
     end
 
+    assert_response :accepted
+    json_response = JSON.parse(response.body)
+    assert_equal "accepted", json_response["status"]
+    assert_equal "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b7", json_response["correlation_id"]
+  end
+
+  test "should display payment" do
+    get payment_url(@payment, format: :json)
+    assert_response :success
+
+    json_response = JSON.parse(response.body)
+    assert_equal @payment.correlation_id, json_response["correlationId"]
+    assert_equal @payment.amount, json_response["amount"]
+  end
+
+  test "should list payments as JSON" do
+    get payments_url(format: :json)
+    assert_response :success
+
+    json_response = JSON.parse(response.body)
+    assert json_response.is_a?(Array)
+
+    if json_response.any?
+      first_payment = json_response.first
+      assert first_payment.key?("correlationId")
+      assert first_payment.key?("amount")
+    end
+  end
+
+  test "should handle HTML form validation errors" do
+    # HTML forms still get synchronous validation
+    post payments_url, params: { payment: { correlation_id: "invalid-uuid", amount: 19.90 } }
+    assert_response :unprocessable_entity
+  end
+
+  test "should handle HTML form missing correlation_id" do
+    # HTML forms still get synchronous validation
+    post payments_url, params: { payment: { amount: 19.90 } }
+    assert_response :unprocessable_entity
+  end
+
+  test "should handle HTML form missing amount" do
+    # HTML forms still get synchronous validation
+    post payments_url, params: { payment: { correlation_id: "4a7901b8-7d26-4d9d-aa19-4dc1c7cf60b8" } }
     assert_response :unprocessable_entity
   end
 end

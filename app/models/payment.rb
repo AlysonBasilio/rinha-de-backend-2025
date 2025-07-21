@@ -6,6 +6,14 @@ class Payment < ApplicationRecord
   validates :amount_in_cents, presence: true, numericality: { greater_than: 0 }
   validates :payment_service, inclusion: { in: [ "default", "fallback" ] }, allow_nil: true
 
+  # Enums for tracking processing status
+  enum :status, {
+    pending: 0,           # Payment created or waiting to be processed/retried
+    processing: 1,        # Currently being processed by external service
+    completed: 2,         # Successfully registered with external service
+    failed: 3             # Failed to register with external service (after all retries)
+  }, default: :pending
+
   # Helper method to get amount in dollars
   def amount
     amount_in_cents ? amount_in_cents / 100.0 : 0.0

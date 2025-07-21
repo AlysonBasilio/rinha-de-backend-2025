@@ -24,19 +24,11 @@ class PaymentsController < ApplicationController
 
   # POST /payments or /payments.json
   def create
-    service = PaymentCreationService.new(params: params, request_format: request.format)
-    result = service.call
-
-    @payment = result.payment
-
-    respond_to do |format|
-      if result.success?
-        format.html { redirect_to @payment, notice: "Payment was successfully created." }
-        format.json { render :show, status: :created, location: @payment }
-      else
-        format.html { render :new, status: :unprocessable_entity }
-        format.json { render json: @payment.errors, status: :unprocessable_entity }
-      end
+    # Use async processing for JSON API requests, sync for HTML forms
+    if json_request?
+      create_async
+    else
+      create_sync
     end
   end
 
@@ -60,6 +52,44 @@ class PaymentsController < ApplicationController
   end
 
   private
+
+  def create_async
+    result = AsyncPaymentCreationService.call(params: params, request_format: request.format)
+
+    respond_to do |format|
+      if result.success?
+        # Return job info for async processing
+        format.json {
+          render json: {
+            status: "accepted",
+            message: "Payment creation queued for processing",
+            correlation_id: result.correlation_id,
+            job_id: result.job_id
+          }, status: :accepted
+        }
+      else
+        format.json { render json: { errors: result.errors }, status: :unprocessable_entity }
+      end
+    end
+  end
+
+  def create_sync
+    service = PaymentCreationService.new(params: params, request_format: request.format)
+    result = service.call
+
+    @payment = result.payment
+
+    respond_to do |format|
+      if result.success?
+        format.html { redirect_to @payment, notice: "Payment was successfully created." }
+        format.json { render :show, status: :created, location: @payment }
+      else
+        format.html { render :new, status: :unprocessable_entity }
+        format.json { render json: @payment.errors, status: :unprocessable_entity }
+      end
+    end
+  end
+
     # Use callbacks to share common setup or constraints between actions.
     def set_payment
       @payment = Payment.find(params.expect(:id))

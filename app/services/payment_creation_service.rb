@@ -1,5 +1,5 @@
 class PaymentCreationService
-  Result = Struct.new(:payment, :newly_created, :errors, :existing_payment_found, keyword_init: true) do
+  Result = Struct.new(:payment, :errors, :existing_payment_found, keyword_init: true) do
     def success?
       errors.blank?
     end
@@ -22,7 +22,6 @@ class PaymentCreationService
     if existing_payment
       return Result.new(
         payment: existing_payment,
-        newly_created: false,
         errors: [],
         existing_payment_found: true
       )
@@ -37,14 +36,12 @@ class PaymentCreationService
 
       Result.new(
         payment: payment,
-        newly_created: true,
         errors: [],
         existing_payment_found: false
       )
     else
       Result.new(
         payment: payment,
-        newly_created: false,
         errors: payment.errors.full_messages,
         existing_payment_found: false
       )

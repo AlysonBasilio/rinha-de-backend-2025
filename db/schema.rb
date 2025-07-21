@@ -10,13 +10,14 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2025_07_20_045338) do
+ActiveRecord::Schema[8.0].define(version: 2025_07_20_052340) do
   create_table "payments", force: :cascade do |t|
     t.integer "amount_in_cents"
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.string "correlation_id"
     t.string "payment_service"
+    t.integer "status", default: 0, null: false
     t.index ["correlation_id"], name: "index_payments_on_correlation_id", unique: true
   end
 end
