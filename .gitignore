@@ -28,6 +28,9 @@
 !/tmp/storage/
 !/tmp/storage/.keep
 
+# Ignore e2e test fixtures.
+tmp/e2e/
+
 /public/assets
 
 # Ignore master key for decrypting credentials and more.
