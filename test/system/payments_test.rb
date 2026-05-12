@@ -14,11 +14,12 @@ class PaymentsTest < ApplicationSystemTestCase
     visit payments_url
     click_on "New payment"
 
-    fill_in "Amount", with: @payment.amount
+    fill_in "Correlation", with: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    fill_in "Amount", with: 19.99
     click_on "Create Payment"
 
     assert_text "Payment was successfully created"
-    click_on "Back"
+    click_on "Back to payments"
   end
 
   test "should update Payment" do
@@ -29,7 +30,7 @@ class PaymentsTest < ApplicationSystemTestCase
     click_on "Update Payment"
 
     assert_text "Payment was successfully updated"
-    click_on "Back"
+    click_on "Back to payments"
   end
 
   test "should destroy Payment" do
