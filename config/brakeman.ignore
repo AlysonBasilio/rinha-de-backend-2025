@@ -1,0 +1,39 @@
+{
+  "ignored_warnings": [
+    {
+      "warning_type": "Dynamic Render Path",
+      "warning_code": 15,
+      "fingerprint": "0c1920754e989c95657bb4f73ded1377070354b7681377006f0c445e4f53a079",
+      "check_name": "Render",
+      "message": "Render path contains parameter value",
+      "file": "app/views/payments/show.html.erb",
+      "line": 3,
+      "link": "https://brakemanscanner.org/docs/warning_types/dynamic_render_path/",
+      "code": "render(action => PaymentCreationService.new(:params => (params), :request_format => request.format).call.payment, {})",
+      "render_path": [
+        {
+          "type": "controller",
+          "class": "PaymentsController",
+          "method": "create_sync",
+          "line": 85,
+          "file": "app/controllers/payments_controller.rb",
+          "rendered": {
+            "name": "payments/show",
+            "file": "app/views/payments/show.html.erb"
+          }
+        }
+      ],
+      "location": {
+        "type": "template",
+        "template": "payments/show"
+      },
+      "user_input": "params",
+      "confidence": "Weak",
+      "cwe_id": [
+        22
+      ],
+      "note": "False positive: render @payment always renders the _payment.html.erb partial. brakeman 7.1.0's new render model shortcut support incorrectly traces params through PaymentCreationService to this render call."
+    }
+  ],
+  "brakeman_version": "7.1.0"
+}
